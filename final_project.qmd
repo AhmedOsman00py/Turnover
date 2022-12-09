@@ -1,0 +1,621 @@
+---
+title: "Survival and Longitudinal Data Analysis Project"
+author: "Ahmed OSMAN"
+format: 
+  html:
+    df-print: paged
+    code-fold: True
+    toc : True
+    toc-float: True
+editor: visual
+---
+
+## Introduction
+
+Frequent employment turnover can create a major loss in the company. We want to predict an employee's risk of quitting the company, for example, within a year. To do this, we will compare survival analysis methods (Cox models, Survival Random Forests) to classification methods. To compare performance, we will spare 25% of the data as a test sample.
+
+```{r}
+#| include: false
+library(tidyverse)
+library(survival)
+library(survminer)
+library(riskRegression)
+library(ggfortify)
+library(randomForestSRC)
+library(formatR)
+```
+
+### Packages
+
+```{r}
+#| eval: false
+#| include: true
+#| code-fold: false
+library(tidyverse)
+library(survival)
+library(survminer)
+library(riskRegression)
+library(ggfortify)
+library(randomForestSRC)
+```
+
+## Data Wrangling
+
+### Data Importation
+
+```{r}
+turnover <- read.csv("turnover2.csv", sep = ";", header = TRUE)
+# head(turnover)
+turnover
+```
+
+| Name         | Type        | Description                                                 |
+|--------------|-------------|-------------------------------------------------------------|
+| duration     | numeric     | experience in months                                        |
+| event        | numeric     | censorship flag: 1 if quit, 0 otherwise                     |
+| gender       | categorical | gender                                                      |
+| age          | numeric     | age in years                                                |
+| industry     | categorical | employee's industry                                         |
+| profession   | categorical | employee's profession                                       |
+| traffic      | categorical | how employee came to the company                            |
+| coach        | categorical | presence of a coach on probation                            |
+| head_gender  | categorical | gender of the supervisor                                    |
+| greywage     | categorical | whether the salary is fully registered with tax authorities |
+| transport    | categorical | employee's means of transportation                          |
+| extraversion | numeric     | extraversion score                                          |
+| indepedent   | numeric     | independent score                                           |
+| selfcontrol  | numeric     | selfcontrol score                                           |
+| anxiety      | numeric     | anxiety score                                               |
+| novator      | numeric     | novator score                                               |
+
+The code for the traffic variable is given as follows:
+
+-   advert (direct contact of one's own initiative)
+-   recNErab (direct contact on the recommendation of a friend, not an employ of the company)
+-   referal (direct contact on the recommendation of a friend, an employee of the company)
+-   youjs (applied on a job site)
+-   KA (recruiting agency brought)
+-   rabrecNErab (employer contacted on the recommendation of a person who knows the employee)
+-   empjs (employer reached on the job site)
+
+------------------------------------------------------------------------
+
+### Data Cleaning
+
+The following variables types `gender, industry, profession, traffic, coach, head_gender, greywage` and `transport` are not coded correctly. They should be **Categorical variables**, so we have to make the necessary changes.
+
+```{r, tidy=TRUE}
+turnover <- turnover %>% mutate(gender = as.factor(gender),
+                                industry = as.factor(industry),
+                                profession = as.factor(profession),
+                                traffic = as.factor(traffic),
+                                coach = as.factor(coach),
+                                head_gender = as.factor(head_gender),
+                                greywage = as.factor(greywage),
+                                Transportation = as.factor(Transportation)) %>% 
+                        rename(transport = Transportation)
+```
+
+now we look for missing data or duplicate observations.
+
+```{r, tidy=TRUE}
+cat(sum(is.na(turnover)), "missing data\n")
+cat(turnover %>% duplicated() %>% sum(), "duplicated rows")
+```
+
+There are no missing values in this dataset, but we found **`r turnover %>% duplicated() %>% sum()`** duplicate observations. To maintain the quality of the data, we will therefore delete them.
+
+```{r}
+turnover <- unique(turnover)
+```
+
+## Data Exploration
+
+We are interested in the variable `duration` according to the variable `event`.
+
+```{r}
+#| warning: False 
+turnover %>% 
+  ggplot(aes(x=duration, color=factor(event),
+             fill=factor(event))) + 
+  geom_histogram(alpha=0.5) +
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") +
+  theme_minimal()
+```
+
+Looking at the graph, we can see that almost half of the data is censored.
+
+To be more precise, let's calculate the percentage of censorship in the dataset.
+
+```{r, tidy=TRUE}
+n <- dim(turnover)[1]
+print((n-sum(turnover$event))/n * 100)
+```
+
+Thus, more precisely the percentage of censorship in the dataset is equal to **`r round((n-sum(turnover$event))/n * 100, 2)`%**.
+
+If the **turnover** depended only on this `duration` variable, we could say that the number of employees who leave a company is equal to half of the total number of employees in a company. But this is not the case, since **turnover** also depends on the other **categorical** and **quantitative** variables. We will therefore focus on the other variables of the model.
+
+### Continuous variables
+
+-   duration *(we just did the study previously)*
+-   event *(the dimension of the dataset is equal to (1116, 16) of which half of the data (558) is censored)*.
+-   age
+-   extraversion
+-   independ
+-   selfcontrol
+-   anxiety
+-   novator
+
+```{r, fig.ncol=2}
+#| warning: false
+turnover %>% 
+  ggplot(aes(x = age, color = factor(event), fill = factor(event))) + 
+  geom_histogram(alpha = 0.5) + 
+  labs(fill = "event", color = "event") + 
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") + 
+  theme_minimal()
+  
+turnover %>% 
+  ggplot(aes(x = extraversion, color = factor(event), fill = factor(event))) + 
+  geom_histogram(alpha = 0.5) + 
+  labs(fill = "event", color = "event") + 
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") +
+  theme_minimal()
+
+turnover %>% 
+  ggplot(aes(x = independ, color = factor(event), fill = factor(event))) + 
+  geom_histogram(alpha = 0.5) + 
+  labs(fill = "event", color = "event") + 
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") + 
+  theme_minimal()
+
+turnover %>% 
+  ggplot(aes(x = selfcontrol, color = factor(event), fill = factor(event))) + 
+  geom_histogram(alpha = 0.5) + 
+  labs(fill = "event", color = "event") + 
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") +
+  theme_minimal()
+
+turnover %>% 
+  ggplot(aes(x = anxiety, color = factor(event), fill = factor(event))) + 
+  geom_histogram(alpha = 0.5) + 
+  labs(fill = "event", color = "event") + 
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") +
+  theme_minimal()
+
+turnover %>% 
+  ggplot(aes(x = novator, color = factor(event), fill = factor(event))) + 
+  geom_histogram(alpha = 0.5) + 
+  labs(fill = "event", color = "event") + 
+  scale_color_brewer(palette = "Dark2") + 
+  scale_fill_brewer(palette = "Dark2") +
+  theme_minimal()
+```
+
+### Discrete variables
+
+-   gender
+-   industry
+-   profession
+-   traffic
+-   coach
+-   head_gender
+-   greywage
+-   transport
+
+```{r}
+#| include: false
+#| eval: false 
+library(RColorBrewer)
+display.brewer.pal(n = 8, name = 'BrBG')
+brewer.pal(n = 8, name = "BrBG")
+palette_original <- c("#01665E", "#8C510A")
+palette1 <- c("#7B9E89", "#F18805")
+palette2 <- c("#7B9E89", "#F39237")
+palette <- c("#90C3C8", "#90C3C8")
+palette4 <- c("#90C3C8", "#FFD670")
+```
+
+```{r, fig.ncol=2}
+palette <- c("#32908F", "#553A41")
+
+categorial_variables <- turnover %>% 
+  select_if(is.factor) %>% 
+  mutate(event = turnover$event)
+
+categorial_variables %>% 
+  ggplot(aes(x = gender,color = factor(event), fill = factor(event))) + 
+  geom_bar(alpha = 0.5) +
+  labs(fill = "event", color = "event") +
+  scale_fill_manual(values = palette) + 
+  scale_colour_manual(values = palette) + 
+  theme_minimal()
+
+categorial_variables %>% 
+  ggplot(aes(x = industry, color = factor(event), fill = factor(event))) + 
+  geom_bar(alpha = 0.5)  +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(fill="event", color="event") +
+  scale_fill_manual(values=palette) + 
+  scale_colour_manual(values=palette)
+
+categorial_variables %>% 
+  ggplot(aes(x = profession, color = factor(event), fill = factor(event))) + 
+  geom_bar(alpha = 0.5)  +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(fill="event", color="event") +
+  scale_fill_manual(values=palette) + 
+  scale_colour_manual(values=palette)
+
+categorial_variables %>% 
+  ggplot(aes(x = traffic, color = factor(event), fill = factor(event))) + 
+  geom_bar(alpha = 0.5) +
+  labs(fill = "event", color = "event") +
+  scale_fill_manual(values = palette) + 
+  scale_colour_manual(values = palette) + 
+  theme_minimal()
+
+categorial_variables %>% 
+  ggplot(aes(x = coach, color = factor(event), fill = factor(event))) + 
+  geom_bar(alpha = 0.5) +
+  labs(fill = "event", color = "event") +
+  scale_fill_manual(values = palette) + 
+  scale_colour_manual(values = palette) + 
+  theme_minimal()
+
+categorial_variables %>% 
+  ggplot(aes(x = head_gender, color = factor(event), fill = factor(event))) + 
+  geom_bar(alpha = 0.5) +
+  labs(fill = "event", color = "event") +
+  scale_fill_manual(values = palette) + 
+  scale_colour_manual(values = palette) + 
+  theme_minimal()
+
+categorial_variables %>% 
+  ggplot(aes(x = greywage, color = factor(event), fill = factor(event))) + 
+  geom_bar(alpha = 0.5) +
+  labs(fill = "event", color = "event") +
+  scale_fill_manual(values = palette) + 
+  scale_colour_manual(values = palette) + 
+  theme_minimal()
+
+categorial_variables %>% 
+  ggplot(aes(x = transport, color = factor(event), fill = factor(event))) +
+  geom_bar(alpha = 0.5) +
+  labs(fill = "event", color = "event") +
+  scale_fill_manual(values = palette) + 
+  scale_colour_manual(values = palette) + 
+  theme_minimal()
+```
+
+Let's check if there are any correlations between the variables.
+
+```{r, tidy=TRUE}
+#| eval: false 
+#| fig-width: 300
+#| fig-height: 500
+turnover_corr <- categorial_variables[-9]
+
+levels(turnover_corr$gender) <- 1:length(levels(turnover_corr$gender))
+levels(turnover_corr$industry) <- 1:length(levels(turnover_corr$industry))
+levels(turnover_corr$profession) <- 1:length(levels(turnover_corr$profession))
+levels(turnover_corr$traffic) <- 1:length(levels(turnover_corr$traffic))
+levels(turnover_corr$coach) <- 1:length(levels(turnover_corr$coach))
+levels(turnover_corr$head_gender) <- 1:length(levels(turnover_corr$head_gender))
+levels(turnover_corr$greywage) <- 1:length(levels(turnover_corr$greywage))
+levels(turnover_corr$transport) <- 1:length(levels(turnover_corr$transport))
+
+turnover_corr <- lapply(turnover, as.numeric)
+turnover_corr <- cbind(turnover_corr, turnover %>% select(-colnames(turnover_corr)))
+
+corrplot::corrplot(cor(turnover_corr[, 1:16]), method="color",  
+                   type="lower", order="hclust", 
+                   addCoef.col = "black",
+                   tl.col="black", tl.srt=45,
+                   sig.level = 0.01, insig = "blank", 
+                   diag=FALSE)
+```
+
+![Correlation plot](corrplot.png)
+
+Finally, we can look at survival functions.
+
+### Survival plots
+
+```{r, fig.ncol=2}
+for (col in colnames(categorial_variables %>% select(-event))) {
+  
+  f <- as.formula(paste("Surv(duration, event) ~ ", col))
+  
+  print(autoplot(survfit(f, data = turnover)) + 
+          theme_minimal() + 
+          ggtitle(paste("Survival plot for the", col, "variable")))
+}
+```
+
+We notice that the survival function of an employee who has as `greywage = white` is superior to that of an employee who has as `greywage = grey`. But as we said before, if the **turnover** depended only on this `greywage` variable, we could say that an employee with `greywage = white` has a **greater** probability of continuing in a company than an employee with `greywage = grey`. But this is not the case, since the **turnover** also depends on the other variables.
+
+On the other hand we notice that it is difficult to interpret the survival functions of the `industry` variable as we can see from the graph, because it has several categories.
+
+## Survival Models
+
+### Train - Test data split
+
+we will split our dataset into **train** and **test**, **75%** and **25%** respectively taking into consideration that we obtain the same percentage of censored and uncensored data, for training our models well in order to obtain good predictions.
+
+```{r, tidy=TRUE}
+set.seed(2022)
+
+test <- turnover
+test$id <- 1:nrow(turnover)
+
+turnover_event_0 <- test[turnover$event == 0, ]
+turnover_event_1 <- test[turnover$event == 1, ]
+
+test_index_event_0 <- sample(turnover_event_0$id, 
+                             size=0.25*nrow(turnover_event_0))
+test_index_event_1 <- sample(turnover_event_1$id, 
+                             size=0.25*nrow(turnover_event_1))
+
+test_index <- c(test_index_event_0, test_index_event_1)
+test <- turnover[test_index, ]
+train <- turnover[-test_index, ]
+
+cat(sum(train$event) / dim(train)[1]*100, "% of train data is censored\n")
+cat(sum(test$event) / dim(test)[1]*100, "% of test data is censored")
+```
+
+### Cox Model
+
+```{r, tidy=TRUE}
+cox_train <- coxph(Surv(duration, event)~., data = train, x = TRUE, y = TRUE)
+cox_train
+```
+
+*Hypothesis of The Cox Model*
+
+> H0 : The Cox Model is equal to the Null Model\
+> H1 : The Cox Model is different from the Null Model
+
+We see that the p-value is significantly lower than 5%, so the model is different from the Null model.
+
+Let's represent the **Brier score** as a function of time.
+
+> **Brier Score** are used to evaluate the accuracy of probabilistic predictions (probabilistic predictions made by machine learning algorithms). *The best possible Brier Score will be 0, and the worst possible Brier Score would be a 1*
+
+```{r}
+cox.test.brier <- Score(list("cox model" = cox_train),
+                        formula = Surv(duration, event) ~ 1, data = test,
+                        metrics = "brier", times = sort(unique(test$duration)))
+
+cox.test.brier$Brier$score %>% 
+  select(model, times, Brier) %>% 
+  ggplot(aes(x = times, y = Brier, color = model)) +
+  geom_line() + 
+  xlab("Time") +
+  theme_minimal() +
+  scale_colour_manual(values=c("darkgrey", "orange")) +
+  ggtitle("Brier Score for the Cox Model")
+```
+
+it is difficult to see directly from the graph if the **Cox model** has a lower Brier score compared to that of the **Null model**, this is why we will calculate the **Integrated Brier Score**.
+
+#### Integrated Brier Score
+
+> In survival analysis, The Integrated Brier Score (IBS) provides an overall calculation of the model performance at all available times.
+
+```{r}
+IBrierScore <- function(brier_score, model_name) {
+  
+  # extracting data
+  brier_score.data <- brier_score$Brier$score %>% 
+    select("model", "times", "Brier") %>% 
+    filter(model == model_name) %>% 
+    select("times", "Brier")
+  
+  x <- brier_score.data$times
+  y <- brier_score.data$Brier
+  id <- order(x)
+  
+  # area under the curve
+  area <- sum(diff(x[id]) * zoo::rollmean(y[id],2))
+  
+  return(area/x[length(x)])
+}
+
+coxIBS <- IBrierScore(cox.test.brier, "cox model")
+coxIBS
+```
+
+Thus, the Cox model has an **Integrated Brier Score** of **`r round(coxIBS * 100, 3)`%**.
+
+### Random Forest Model
+
+```{r}
+rand_forest.model <- rfsrc(Surv(duration, event) ~ ., data = train)
+plot(vimp(rand_forest.model))
+```
+
+*The Structure of a Decision Tree of The Random Forest Model*
+
+```{r}
+#| fig-width: 3
+#| fig-height: 5
+plot(get.tree(rand_forest.model, 5))
+```
+
+```{r}
+rand_forest.brier <- Score(list("rf model" = rand_forest.model),
+                        formula = Surv(duration, event) ~ 1, data = test,
+                        metrics = "brier", times = sort(unique(test$duration)))
+
+
+rand_forest.brier$Brier$score %>% 
+  select(model, times, Brier) %>%
+  full_join(cox.test.brier$Brier$score %>% select(model, times, Brier),
+            by = c("model", "times", "Brier")) %>% 
+  ggplot(aes(x = times, y = Brier, color = model)) +
+  geom_line() + 
+  xlab("Time") +
+  theme_minimal() +
+  scale_colour_manual(values=c("darkgrey", "darkgreen", "orange")) +
+  ggtitle("Brier Score for the Different Models")
+
+rfIBS <- round(IBrierScore(rand_forest.brier, "rf model"), 4)
+```
+
+As we can see, from the graph we see that the **Random Forest model** has a **lower Brier Score** than that the **Cox model**.
+
+#### Integrated Brier Score
+
+To be more precisely, the **Random Forest model** has an **Integrated Brier Score** of **`r rfIBS * 100`%**, which is lower than that of the **Cox model** **(`r round(coxIBS * 100, 3)`)** .
+
+This implies that the **Random Forest model** is better than the **Cox model** in terms of **predictions**.
+
+## Predictions
+
+We want to predict the probability of an employee will stay for longer than 3 years, whose features are **Female** of **age 30**, referred by an employee of the company (**referral**) in **IT industry**, profession **HR**, commuting by **bus**, having a **coach** during the probation, with **male supervisor**, whose characteristic scores are **5 for all categories**.
+
+```{r}
+employee <- data.frame(event = 0,
+                       duration = 0,
+                       gender = "f",
+                       age = 30,
+                       industry = "IT", 
+                       profession = "HR",
+                       traffic = "referal",
+                       coach = "yes",
+                       head_gender = "m",
+                       greywage = "white",
+                       transport = "bus",
+                       extraversion = 5.0,
+                       independ = 5.0,
+                       selfcontrol = 5.0, 
+                       anxiety = 5.0,
+                       novator = 5.0, stringsAsFactors=TRUE)
+
+str(employee)
+```
+
+Let's compute the probability that this employee will stay for longer than 3 years :
+
+```{r}
+p <- predict(rand_forest.model, employee)
+
+index <- which(p$time.interest > 36)
+prob <- p$survival[index]
+```
+
+So the probability that the employee will stay for longer than:
+
+-   **3 years** is **`r round(prob[1], 3)`**
+-   **3 years and 1 month** is **`r round(prob[2], 3)`**
+-   **3 years and 2 months** is **`r round(prob[3], 3)`**
+-   **3 years and 6 months** is **`r round(prob[7], 3)`**
+
+now we want to see if there is an impact if the same employee worked in another company.
+
+```{r}
+industries <- levels(turnover$industry)
+prob <- c()
+
+for (industry in industries) {
+  
+  employee$industry <- industry
+  p <- predict(rand_forest.model, employee)
+  
+  index <- which(p$time.interest >= 36)
+  prob <- c(prob, p$survival[index][1])
+  
+}
+
+estimation <- data.frame(industry = industries, prob = prob)
+
+
+highligh_bar <- function(estimation, title) {
+  
+  estimation$color <- rep("gray", nrow(estimation))
+  estimation[which.min(estimation$prob), ]$color <- "min"
+  estimation[which.max(estimation$prob), ]$color <- "max"
+
+  barplot <- estimation %>% 
+    ggplot(aes(x = industry, y = prob, fill = color)) +
+    geom_bar(stat = "identity") + 
+    scale_fill_manual(values = c(max = "darkgreen",
+                                 min = "darkred",
+                                 gray = "gray")) +
+    ylab("Probability") + 
+    theme_minimal() + 
+    coord_flip() +
+    ggtitle(title) +
+    theme(plot.title = element_text(hjust = 0.15))
+  
+  return (barplot)
+}
+
+highligh_bar(estimation, "The probability that the employee will stay for longer than 3 years")
+```
+
+```{r, echo=FALSE}
+max.industry <- estimation[which.max(estimation$prob), ]$industry
+min.industry <- estimation[which.min(estimation$prob), ]$industry
+```
+
+We can see that if the employee works in a **`r max.industry`** sector, he will have the **greatest** probability of staying **more than 3 years** in the company than another employee with the same characteristics but in another sector.
+
+We can also notice that if an employee works in a **`r min.industry`** sector, he will have the **lowest** probability of staying **more than 3 years** in the company than another employee with the same characteristics but in another sector.
+
+Now we will consider that this **employee** has already worked for one year, we want to estimate the probability that this employee will stay for **another 2 years**
+
+```{r}
+employee$duration <- 12
+prob <- c()
+
+for (industry in industries) {
+  
+  employee$industry <- industry
+  p <- predict(rand_forest.model, employee)
+  
+  index <- which(p$time.interest >= 24)
+  prob <- c(prob, p$survival[index][1])
+
+}
+
+estimation2 <- data.frame(industry = industries, prob = prob)
+
+highligh_bar(estimation2, "The probability that the employee will stay for another 2 years")
+```
+
+```{r, echo=FALSE}
+max.industry2 <- estimation2[which.max(estimation2$prob), ]$industry
+min.industry2 <- estimation2[which.min(estimation2$prob), ]$industry
+
+IT1.prob <- estimation[estimation$industry == "IT", ]$prob
+IT2.prob <- estimation2[estimation2$industry == "IT", ]$prob
+```
+
+We can see that if the employee works in a **`r max.industry2`** sector, he will have a **greater** probability of staying **another 2 years** in the company than another employee with the same characteristics but working in another sector.
+
+We can also notice that if an employee works in an **`r min.industry2`** industry, he will have the **lowest** probability of staying **another 2 years** in the company compared to another employee with the same characteristics but working in another industry.
+
+We notice that the probability that the employee continues **another two years** in a company knowing that he has **already worked one year** in it is **higher** than the probability of an employee with the same characteristics who would work **three years** knowing that he has just started in the company.
+
+For example, if we look at the graph for an employee who has been working in the **IT** sector for one year, we notice that the probability that this employee will stay in the company for **another two years** is equal to **`r round(IT2.prob, 3)`** which is **higher** than the probability of another employee with the same profile who will stay for **three years** but who has just started working in this company **(`r round(IT1.prob, 3)`)**.
+
+This means that employees are more likely to stay with the same company if they have already worked there for at least one year than other employees with the same profile who have just started working. But in these days, this is not really the case, employees tend not to stay for a long time in the same company (especially in sectors where there are a lot of offers like in IT). IT employees can start as junior employees in startups or small companies and when they gain experience, they move to bigger companies that offer higher salaries.
+
+Contrary to our previous conclusion, our predictions are not consistent with our conclusion. This may be due to the fact that the data is biased, or we may look at it from another point of view, that the data is not up to date with the current generations.
+
+## Conclusion
+
+Turnover calculations are an important metric in most businesses. They are useful to provide a method to track the movement of employee's out of your business and identifying potential risks.\
+Turnover and tenure have a complex relationship. A business with a high turnover will logically have a lower average tenure, and at the same time tenure is an important factor in the decision to exit.
